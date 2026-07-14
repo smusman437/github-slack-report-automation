@@ -1,0 +1,791 @@
+{
+  "name": "GitHub Activity Digest → Slack",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 1"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -224,
+        -1536
+      ],
+      "id": "b06a9b68-bdc3-4a0c-98b0-76fe4f7ce25c",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "url": "https://api.github.com/user/orgs",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        224,
+        -1760
+      ],
+      "id": "2389e8f3-708b-42a7-8cf4-f1b76b644819",
+      "name": "Get My Organizations",
+      "credentials": {
+        "githubApi": {
+          "id": "N6jds0pzpU0KNl25",
+          "name": "GitHub account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://api.github.com/user/repos",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "affiliation",
+              "value": "owner"
+            },
+            {
+              "name": "per_page",
+              "value": "100"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        224,
+        -1280
+      ],
+      "id": "0daebe60-344a-4671-971a-65849931ac45",
+      "name": "Get Personal Repos",
+      "credentials": {
+        "githubApi": {
+          "id": "N6jds0pzpU0KNl25",
+          "name": "GitHub account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        448,
+        -1760
+      ],
+      "id": "ac14a322-6e8e-4fc3-adf5-dd55a3cc4fd7",
+      "name": "Loop Orgs"
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/orgs/{{ $json.login }}/repos",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "per_page",
+              "value": "100"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        672,
+        -2000
+      ],
+      "id": "b65f8bdf-8d1c-4b25-a03f-69a7a197a7c9",
+      "name": "Get Org Repos",
+      "credentials": {
+        "githubApi": {
+          "id": "N6jds0pzpU0KNl25",
+          "name": "GitHub account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const allRepoCommits = items;\nif (allRepoCommits.length === 0) {\n  return [{ json: { message: \"No commits found in the last week\", groupedData: [] } }];\n}\n\nconst allEntries = [];\nfor (const item of allRepoCommits) {\n  const data = item.json.data ? item.json.data : [item.json];\n  for (const repoData of data) {\n    if (!repoData.commits || repoData.commits.length === 0) continue;\n    allEntries.push(repoData);\n  }\n}\n\nconst grouped = {};\nfor (const repoData of allEntries) {\n  const key = repoData.repo + \"::\" + (repoData.pr_number || \"none\");\n  if (!grouped[key]) {\n    grouped[key] = {\n      repo: repoData.repo,\n      source_type: repoData.source_type,\n      branch: repoData.branch,\n      pr_number: repoData.pr_number,\n      commits: []\n    };\n  }\n  for (const commit of repoData.commits) {\n    if (!commit.sha || !commit.message) continue;\n    const alreadyThere = grouped[key].commits.some(c => c.sha === commit.sha);\n    if (!alreadyThere) {\n      grouped[key].commits.push(commit);\n    }\n  }\n}\n\nconst groupedList = Object.values(grouped).filter(g => g.commits.length > 0);\n\nif (groupedList.length === 0) {\n  return [{ json: { message: \"No commits found in the last week\", groupedData: [] } }];\n}\n\nconst personalRepos = groupedList.filter(g => g.source_type === \"personal\");\nconst orgRepos = groupedList.filter(g => g.source_type !== \"personal\")\n  .sort((a, b) => a.repo.localeCompare(b.repo));\n\nlet totalCommits = 0;\nlet personalCommits = 0;\nlet orgCommits = 0;\nlet message = \"*📊 Weekly Commit Summary*\\n\\n\";\n\nif (personalRepos.length > 0) {\n  message += \"*🧑‍💻 Personal*\\n\";\n  for (const repoData of personalRepos) {\n    personalCommits += repoData.commits.length;\n    totalCommits += repoData.commits.length;\n    message += \"\\n*\" + repoData.repo + \"*\\n\";\n    for (const commit of repoData.commits) {\n      message += \"  • `\" + commit.sha + \"` \" + commit.message + \"\\n\";\n    }\n  }\n  message += \"\\n\";\n}\n\nif (orgRepos.length > 0) {\n  message += \"*🏢 Organization*\\n\";\n  for (const repoData of orgRepos) {\n    orgCommits += repoData.commits.length;\n    totalCommits += repoData.commits.length;\n    const branchInfo = repoData.branch ? \" [\" + repoData.branch + \"]\" : \"\";\n    const prInfo = repoData.pr_number ? \" PR #\" + repoData.pr_number : \"\";\n    message += \"\\n*\" + repoData.repo + \"*\" + branchInfo + prInfo + \"\\n\";\n    for (const commit of repoData.commits) {\n      message += \"  • `\" + commit.sha + \"` \" + commit.message + \"\\n\";\n    }\n  }\n  message += \"\\n\";\n}\n\nmessage += \"*Total: \" + totalCommits + \" commits* (\" + personalCommits + \" personal, \" + orgCommits + \" organization)\";\n\nreturn [{\n  json: {\n    message: message,\n    commit_count: totalCommits,\n    personal_count: personalCommits,\n    org_count: orgCommits,\n    groupedData: groupedList   // <-- new: clean structured data for OpenAI\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        -1520
+      ],
+      "id": "08940f67-8faa-42e6-91ba-15309f974b7c",
+      "name": "Aggregate Commits",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "user",
+        "user": {
+          "__rl": true,
+          "value": "USLACKBOT",
+          "mode": "list",
+          "cachedResultName": "slackbot"
+        },
+        "text": "={{ $json.message }}",
+        "otherOptions": {}
+      },
+      "id": "44363438-4764-4722-9b4f-e62e04508445",
+      "name": "Send Slack Message",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.5,
+      "position": [
+        1936,
+        -1520
+      ],
+      "webhookId": "6a1524b1-390b-42a6-a641-35e4259276a0",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "YQNgBtHjgY1P0dsO",
+          "name": "Slack OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $json.full_name }}/pulls",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "state",
+              "value": "all"
+            },
+            {
+              "name": "per_page",
+              "value": "100"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b1686cd6-495b-499e-9973-2c197422267a",
+      "name": "Get All PRs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1120,
+        -1904
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "githubApi": {
+          "id": "N6jds0pzpU0KNl25",
+          "name": "GitHub account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const MY_USERNAME = $('Set Report Config').first().json.githubUsername;\nconst sinceDate = new Date($('Set Report Config').first().json.sinceDate);\n\nconst myRecentPRs = items.filter(item => {\n  const prData = item.json;\n  return prData.user &&\n    prData.user.login.toLowerCase() === MY_USERNAME.toLowerCase() &&\n    new Date(prData.created_at) >= sinceDate;\n});\n\nreturn myRecentPRs;"
+      },
+      "id": "c12c9bed-fe13-42ea-8bf0-6cffbf4e02b5",
+      "name": "Filter My PRs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        -1904
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $json.full_name }}/commits",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "since",
+              "value": "={{ $('Set Report Config').first().json.sinceDate }}"
+            },
+            {
+              "name": "author",
+              "value": "={{ $('Set Report Config').first().json.githubUsername }}"
+            },
+            {
+              "name": "per_page",
+              "value": "100"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b9285c46-fe5d-437f-bcba-948637e412c2",
+      "name": "Get Personal Commits",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        672,
+        -1472
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "githubApi": {
+          "id": "N6jds0pzpU0KNl25",
+          "name": "GitHub account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const repoData = $(\"Loop Personal Repos\").first().json;\nconst commits = items;\nif (commits.length === 0) {\n  return [];\n}\nreturn [{\n  json: {\n    repo: repoData.full_name,\n    source_type: \"personal\",\n    commits: commits.map(c => ({\n      sha: c.json.sha ? c.json.sha.slice(0, 7) : null,\n      message: c.json.commit ? c.json.commit.message.split(\"\\\\n\")[0] : null,\n      author: c.json.commit && c.json.commit.author ? c.json.commit.author.name : null,\n      date: c.json.commit && c.json.commit.author ? c.json.commit.author.date : null\n    }))\n  }\n}];"
+      },
+      "id": "b405eb13-1217-4304-a206-7e3cfa7dc151",
+      "name": "Format Personal Commits",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        -1280
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "ea1f5a45-2a5f-4ecd-b089-7febd560f45a",
+      "name": "Loop Personal Repos",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        448,
+        -1280
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "43570b71-6022-41d2-853d-939347407f76",
+      "name": "Loop Org Repos",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        896,
+        -1824
+      ],
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {},
+      "id": "75af7288-cb2e-478f-a436-950f5b4fb4a7",
+      "name": "Merge All Commits",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        896,
+        -1520
+      ]
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "id": "c712bdf1-2543-44a8-98cb-8e1ed442f1c0",
+      "name": "Collect Personal Commits",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        672,
+        -1280
+      ]
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "id": "48c54425-05c1-403d-936b-cd2caedd22e6",
+      "name": "Collect Org Commits",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        672,
+        -1760
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.commits_url || 'https://api.github.com/rate_limit' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "options": {}
+      },
+      "id": "75670b1e-c344-4a3e-b56e-83f201b6e807",
+      "name": "Get PR Commits",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1792,
+        -1904
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "githubApi": {
+          "id": "N6jds0pzpU0KNl25",
+          "name": "GitHub account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const repoData = $(\"Loop Org Repos\").first().json;\nconst prData = $(\"Filter My PRs\").first().json;\nconst commits = items;\n\nif (commits.length === 0) {\n  return [];\n}\n\nconst validCommits = commits.filter(\n  (c) => c.json && c.json.sha && c.json.commit\n);\n\nif (validCommits.length === 0) {\n  return [];\n}\n\nfunction isMergeCommit(message) {\n  return (\n    message.startsWith(\"Merge branch\") ||\n    message.startsWith(\"Merge pull request\") ||\n    message.startsWith(\"Merge remote-tracking branch\")\n  );\n}\n\nconst filteredCommits = validCommits\n  .map((c) => ({\n    sha: c.json.sha.slice(0, 7),\n    message: c.json.commit.message.split(\"\\n\")[0],\n    author: c.json.commit.author ? c.json.commit.author.name : null,\n    date: c.json.commit.author ? c.json.commit.author.date : null,\n  }))\n  .filter((c) => !isMergeCommit(c.message));\n\nif (filteredCommits.length === 0) {\n  return [];\n}\n\nreturn [\n  {\n    json: {\n      repo: repoData.full_name,\n      source_type: \"organization\",\n      pr_number: prData.number,\n      pr_title: prData.title,\n      branch: prData.head ? prData.head.ref : null,\n      commits: filteredCommits,\n    },\n  },\n];"
+      },
+      "id": "fba2ce42-bebc-4e91-a97b-040df149ecf7",
+      "name": "Format Org Commits",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2016,
+        -1824
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.commits_url }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              },
+              "id": "de58a178-59ed-4680-ac85-00c0dd1a6143"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b7feb2a5-6090-48d8-a909-96d219a34484",
+      "name": "Filter Valid PRs",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        1568,
+        -1904
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "=You are summarizing a developer's work for a weekly team update.\n\nHere is the structured commit data (JSON), grouped by repository:\n\n{{ JSON.stringify($json.groupedData) }}\n\nWrite a concise 2-4 sentence summary of what was worked on this week, grouped by theme or project where relevant. Do not list every commit — synthesize the overall work. Write in plain, professional prose, neutral tone (no \"I\"). Do not use markdown formatting."
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        1328,
+        -1520
+      ],
+      "id": "38ffc211-5071-47b1-a789-e0a7bf290446",
+      "name": "Message a model",
+      "credentials": {
+        "openAiApi": {
+          "id": "EmUkhkl6w8Krw0UQ",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const aiResponse = $json.output;\nlet aiSummaryText = \"\";\nif (aiResponse && aiResponse[0] && aiResponse[0].content && aiResponse[0].content[0]) {\n  aiSummaryText = aiResponse[0].content[0].text || \"\";\n}\n\nconst originalData = $('Aggregate Commits').first().json;\nconst reportLabel = $('Set Report Config').first().json.reportLabel || \"Commit\";\nconst headerText = \"*📊 \" + reportLabel + \" Summary*\\n\\n\";\n\nlet finalMessage = headerText;\nif (aiSummaryText) {\n  finalMessage += \"_\" + aiSummaryText.trim() + \"_\\n\\n\";\n}\n\n// Strip whatever header the upstream node used, dynamically, not hardcoded\nconst bodyWithoutHeader = originalData.message.replace(/^\\*📊[^\\n]*\\*\\n\\n/, \"\");\nfinalMessage += bodyWithoutHeader;\n\nreturn [{ json: { message: finalMessage } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        -1520
+      ],
+      "id": "b888a7c5-6848-40fd-8e6c-c28d790681a7",
+      "name": "Combine Summary"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "df1c804d-7590-46e6-96e0-25e74052f194",
+              "name": "reportPeriodDays",
+              "value": "7",
+              "type": "string"
+            },
+            {
+              "id": "4f8e9803-d21a-4728-aa43-c7154c0c149f",
+              "name": "sinceDate",
+              "value": "={{ new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString() }}",
+              "type": "string"
+            },
+            {
+              "id": "0e581897-72b2-479e-af65-0d3e93f033ae",
+              "name": "reportLabel",
+              "value": "Weekly",
+              "type": "string"
+            },
+            {
+              "id": "4d9f1fba-5d1d-475b-aa32-64e2aa3be47f",
+              "name": "githubUsername",
+              "value": "smusman437",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -80,
+        -1488
+      ],
+      "id": "ea68ebbb-4461-4ed5-a05a-2c980a6c8da4",
+      "name": "Set Report Config"
+    }
+  ],
+  "pinData": {
+    "Schedule Trigger": [
+      {
+        "json": {
+          "timestamp": "2026-07-07T22:54:54.567+05:00",
+          "Readable date": "July 7th 2026, 10:54:54 pm",
+          "Readable time": "10:54:54 pm",
+          "Day of week": "Tuesday",
+          "Year": "2026",
+          "Month": "July",
+          "Day of month": "07",
+          "Hour": "22",
+          "Minute": "54",
+          "Second": "54",
+          "Timezone": "Asia/Karachi (UTC+05:00)"
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Report Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Personal Repos": {
+      "main": [
+        [
+          {
+            "node": "Loop Personal Repos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get My Organizations": {
+      "main": [
+        [
+          {
+            "node": "Loop Orgs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Orgs": {
+      "main": [
+        [
+          {
+            "node": "Collect Org Commits",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get Org Repos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Org Repos": {
+      "main": [
+        [
+          {
+            "node": "Loop Org Repos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Commits": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get All PRs": {
+      "main": [
+        [
+          {
+            "node": "Filter My PRs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter My PRs": {
+      "main": [
+        [
+          {
+            "node": "Filter Valid PRs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Personal Commits": {
+      "main": [
+        [
+          {
+            "node": "Format Personal Commits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Personal Commits": {
+      "main": [
+        [
+          {
+            "node": "Loop Personal Repos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Personal Repos": {
+      "main": [
+        [
+          {
+            "node": "Collect Personal Commits",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get Personal Commits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Org Repos": {
+      "main": [
+        [
+          {
+            "node": "Loop Orgs",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get All PRs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge All Commits": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Commits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Personal Commits": {
+      "main": [
+        [
+          {
+            "node": "Merge All Commits",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Collect Org Commits": {
+      "main": [
+        [
+          {
+            "node": "Merge All Commits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get PR Commits": {
+      "main": [
+        [
+          {
+            "node": "Format Org Commits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Org Commits": {
+      "main": [
+        [
+          {
+            "node": "Loop Org Repos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Valid PRs": {
+      "main": [
+        [
+          {
+            "node": "Get PR Commits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Combine Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combine Summary": {
+      "main": [
+        [
+          {
+            "node": "Send Slack Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Report Config": {
+      "main": [
+        [
+          {
+            "node": "Get My Organizations",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Personal Repos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "671b4793-63d7-4da9-bb00-bac9da883f34",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "734f2665df0432ab339a2bff7b3fcea52733d267bce42b1d691b680e18f3a825"
+  },
+  "nodeGroups": [],
+  "id": "6AisT1vvmgwDLyqW",
+  "tags": []
+}
