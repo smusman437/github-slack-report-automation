@@ -1,5 +1,7 @@
 # GitHub Activity → Slack Summary (n8n Workflow)
 
+🎥 **[Watch the demo](https://github.com/user-attachments/assets/666bb776-09d4-463d-8d79-2968ba9d1737)** — see it fetch activity and post the summary to Slack in real time.
+
 Tracks your GitHub pull requests and commits (across organization and personal repos) and posts a weekly summary to Slack, optionally polished by an AI-generated write-up.
 
 ## What this workflow does
